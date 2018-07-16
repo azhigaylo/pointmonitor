@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>main.qml</file>
+        <file>update_dpoint.qml</file>
+        <file>update_apoint.qml</file>
+    </qresource>
+</RCC>
