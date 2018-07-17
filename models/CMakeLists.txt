@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.1)
 project(datamodels LANGUAGES CXX)
 
 find_package(Qt5 COMPONENTS Core Network REQUIRED)
-find_package(Boost REQUIRED thread system)
 
 qt5_wrap_cpp(moc_datamodels_src ${CMAKE_CURRENT_SOURCE_DIR}/include/models/DataModels.hpp)
 qt5_wrap_cpp(moc_conditions_src ${CMAKE_CURRENT_SOURCE_DIR}/include/models/Conditions.hpp)
