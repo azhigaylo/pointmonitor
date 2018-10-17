@@ -159,6 +159,8 @@ void CDataClientInterface::readHandler(const boost::system::error_code& error, s
 {
     if(boost::system::errc::success == error.value())
     {
+        qDebug() << __func__ << ": we got " << bytes_transferred << "bytes";
+
         m_read_buffer.commit(bytes_transferred);
 
         processIncoming();
@@ -260,15 +262,15 @@ void CDataClientInterface::processIncoming()
                       }
                       default :
                       {
-                         qDebug() << __func__ << ": unknown command !";
+                          qDebug() << __func__ << ": unknown command !";
                           break;
                       }
                     }
-                    m_read_buffer.consume(package.header.data_size);
+                    qDebug() << __func__ << ": processed" << package.header.data_size << "bytes";
                 }
-                else break;
+                else {break;}
             }
-            else break;
+            else {break;}
         }
     }
     else
