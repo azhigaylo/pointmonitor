@@ -143,13 +143,14 @@ void CDataClientInterface::connectionHandler(const boost::system::error_code& er
         qDebug() << __func__ << ": connected...";
 
         // allocate new subbuffer & wait for response package
-        m_raw_buf = m_read_buffer.prepare(sizeof(TResponse));
+        m_raw_buf = m_read_buffer.prepare(sizeof(THeader));
 
         // wait for read request package
-        m_boost_socket->async_read_some(m_raw_buf, boost::bind(&CDataClientInterface::readHandler,
-                                                               this,
-                                                               boost::asio::placeholders::error,
-                                                               boost::asio::placeholders::bytes_transferred));
+        async_read(*m_boost_socket, m_raw_buf, boost::asio::transfer_all(),
+                                               boost::bind(&CDataClientInterface::readHeader,
+                                                           this,
+                                                           boost::asio::placeholders::error,
+                                                           boost::asio::placeholders::bytes_transferred));
         // send start requests
         m_comm_thread.reset(new boost::scoped_thread<>([this](){ sendGetDpointsReq(0, d_point_total);
                                                                  std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -162,7 +163,7 @@ void CDataClientInterface::connectionHandler(const boost::system::error_code& er
     }
 }
 
-void CDataClientInterface::readHandler(const boost::system::error_code& error, size_t bytes_transferred)
+void CDataClientInterface::readHeader(const boost::system::error_code& error, size_t bytes_transferred)
 {
     if(boost::system::errc::success == error.value())
     {
@@ -170,14 +171,7 @@ void CDataClientInterface::readHandler(const boost::system::error_code& error, s
 
         m_read_buffer.commit(bytes_transferred);
 
-        processIncoming();
-
-        // allocate new subbuffer & wait for response package
-        m_raw_buf = m_read_buffer.prepare(sizeof(TResponse));
-        m_boost_socket->async_read_some(m_raw_buf, boost::bind(&CDataClientInterface::readHandler,
-                                                               this,
-                                                               boost::asio::placeholders::error,
-                                                               boost::asio::placeholders::bytes_transferred));
+        processHeader();
     }
     else
     {
@@ -205,87 +199,172 @@ void CDataClientInterface::readHandler(const boost::system::error_code& error, s
     }
 }
 
-void CDataClientInterface::processIncoming()
+void CDataClientInterface::readData(const boost::system::error_code& error, size_t bytes_transferred)
+{
+    if(boost::system::errc::success == error.value())
+    {
+        qDebug() << __func__ << ": we got " << bytes_transferred << "bytes";
+
+        m_read_buffer.commit(bytes_transferred);
+
+        processIncomingData();
+    }
+    else
+    {
+        switch (error.value())
+        {
+            // operation canceled - it's ok for us
+            case boost::system::errc::operation_canceled :
+            {
+                updateConnectionState(false);
+                break;
+            }
+            case boost::system::errc::connection_reset:
+            case boost::system::errc::no_such_file_or_directory :
+            {
+                qDebug() <<  __func__ << ": error(" << error.value() << ") message: " << QString(error.message().c_str());
+                updateConnectionState(false);
+                break;
+            }
+            default :
+            {
+                qDebug() <<  __func__ << ": error(" << error.value() << ") message: " << QString(error.message().c_str());
+                break;
+            }
+        }
+    }
+}
+
+void CDataClientInterface::processHeader()
 {
     std::istream is_data(&m_read_buffer);
 
     // check magic header 'magicHeader'
     if (magicHeader == is_data.peek())
     {
-        while(true)
-        {
-            // read header
-            TResponse package;
-            is_data.read(reinterpret_cast<char*>(&package.header), sizeof(package.header));
-            if (is_data.gcount() >= sizeof(package.header))
-            {
-                qDebug() << __func__ << ": we got a header: head_strt=" << package.header.head_strt << ", data_size=" << package.header.data_size
-                         << ", cmd=" << package.header.cmd << ", start_point=" << package.header.start_point << ", number_point=" << package.header.number_point;
-                // read data
-                is_data.read(reinterpret_cast<char*>(&package.array), package.header.data_size - sizeof(package.header));
-                if (is_data.gcount() >=  package.header.data_size - sizeof(package.header))
-                {
-                    switch(package.header.cmd)
-                    {
-                      case GetDiscretPoint :
-                      {
-                         std::lock_guard<std::mutex> lock(m_dpoint_mtx);
-                         for (int i=0; i < package.header.number_point; i++)
-                         {
-                            DPOINT[package.header.start_point + i] = package.array.digital[i];
-                         }
-                         dpoint_updated(package.header.start_point, package.header.number_point);
-                         break;
-                      }
-                      case GetAnalogPoint :
-                      {
-                         std::lock_guard<std::mutex> lock(m_apoint_mtx);
-                         for (int i=0; i < package.header.number_point; i++)
-                         {
-                            APOINT[package.header.start_point + i] = package.array.analog[i];
-                         }
-                         apoint_updated(package.header.start_point, package.header.number_point);
-                         break;
-                      }
-                      case NotifyDiscretPoint :
-                      {
-                         std::lock_guard<std::mutex> lock(m_dpoint_mtx);
-                         for (int i=0; i < package.header.number_point; i++)
-                         {
-                            DPOINT[package.header.start_point + i] = package.array.digital[i];
-                         }
-                         dpoint_updated(package.header.start_point, package.header.number_point);
-                         break;
-                      }
-                      case NotifyAnalogPoint :
-                      {
-                         std::lock_guard<std::mutex> lock(m_apoint_mtx);
-                         for (int i=0; i < package.header.number_point; i++)
-                         {
-                            APOINT[package.header.start_point + i] = package.array.analog[i];
-                         }
-                         apoint_updated(package.header.start_point, package.header.number_point);
-                         break;
-                      }
-                      default :
-                      {
-                          qDebug() << __func__ << ": unknown command !";
-                          break;
-                      }
-                    }
-                    qDebug() << __func__ << ": processed" << package.header.data_size << "bytes";
-                }
-                else {break;}
-            }
-            else {break;}
-        }
+         // read header
+         is_data.read(reinterpret_cast<char*>(&m_package.header), sizeof(m_package.header));
+         if (is_data.gcount() >= sizeof(m_package.header))
+         {
+             qDebug() << __func__ << ": we got a header: head_strt=" << m_package.header.head_strt << ", data_size=" << m_package.header.data_size
+                      << ", cmd=" << m_package.header.cmd << ", start_point=" << m_package.header.start_point << ", number_point=" << m_package.header.number_point;
+
+             // allocate new subbuffer & wait for response package
+             m_raw_buf = m_read_buffer.prepare(m_package.header.data_size - sizeof(m_package.header));
+
+             // wait for read request package
+             async_read(*m_boost_socket, m_raw_buf, boost::asio::transfer_all(),
+                                                    boost::bind(&CDataClientInterface::readData,
+                                                                this,
+                                                                boost::asio::placeholders::error,
+                                                                boost::asio::placeholders::bytes_transferred));
+         }
+         else
+         {
+            // wait for new header
+            // allocate new subbuffer & wait for response package
+            m_raw_buf = m_read_buffer.prepare(sizeof(THeader));
+
+            // wait for read request package
+            async_read(*m_boost_socket, m_raw_buf, boost::asio::transfer_all(),
+                                                   boost::bind(&CDataClientInterface::readHeader,
+                                                               this,
+                                                               boost::asio::placeholders::error,
+                                                               boost::asio::placeholders::bytes_transferred));
+         }
     }
     else
     {
         qDebug() << __func__ << ": bad package, skip it...";
         m_read_buffer.consume(m_read_buffer.size());
-        throw;
+
+        // wait for new header
+        // allocate new subbuffer & wait for response package
+        m_raw_buf = m_read_buffer.prepare(sizeof(THeader));
+
+        // wait for read request package
+        async_read(*m_boost_socket, m_raw_buf, boost::asio::transfer_all(),
+                                               boost::bind(&CDataClientInterface::readHeader,
+                                                           this,
+                                                           boost::asio::placeholders::error,
+                                                           boost::asio::placeholders::bytes_transferred));
     }
+}
+
+void CDataClientInterface::processIncomingData()
+{
+    std::istream is_data(&m_read_buffer);
+
+    // read data
+    is_data.read(reinterpret_cast<char*>(&m_package.array), m_package.header.data_size - sizeof(m_package.header));
+    if (is_data.gcount() >=  m_package.header.data_size - sizeof(m_package.header))
+    {
+        switch(m_package.header.cmd)
+        {
+          case GetDiscretPoint :
+          {
+             std::lock_guard<std::mutex> lock(m_dpoint_mtx);
+             for (int i=0; i < m_package.header.number_point; i++)
+             {
+                DPOINT[m_package.header.start_point + i] = m_package.array.digital[i];
+             }
+             dpoint_updated(m_package.header.start_point, m_package.header.number_point);
+             break;
+          }
+          case GetAnalogPoint :
+          {
+             std::lock_guard<std::mutex> lock(m_apoint_mtx);
+             for (int i=0; i < m_package.header.number_point; i++)
+             {
+                APOINT[m_package.header.start_point + i] = m_package.array.analog[i];
+             }
+             apoint_updated(m_package.header.start_point, m_package.header.number_point);
+             break;
+          }
+          case NotifyDiscretPoint :
+          {
+             std::lock_guard<std::mutex> lock(m_dpoint_mtx);
+             for (int i=0; i < m_package.header.number_point; i++)
+             {
+                DPOINT[m_package.header.start_point + i] = m_package.array.digital[i];
+             }
+             dpoint_updated(m_package.header.start_point, m_package.header.number_point);
+             break;
+          }
+          case NotifyAnalogPoint :
+          {
+             std::lock_guard<std::mutex> lock(m_apoint_mtx);
+             for (int i=0; i < m_package.header.number_point; i++)
+             {
+                APOINT[m_package.header.start_point + i] = m_package.array.analog[i];
+             }
+             apoint_updated(m_package.header.start_point, m_package.header.number_point);
+             break;
+          }
+          default :
+          {
+              qDebug() << __func__ << ": unknown command !";
+              break;
+          }
+        }
+        qDebug() << __func__ << ": processed" << m_package.header.data_size << "bytes";
+    }
+    else
+    {
+        qDebug() << __func__ << ": bad package, skip it...";
+        m_read_buffer.consume(m_read_buffer.size());
+    }
+
+    // wait for new header
+    // allocate new subbuffer & wait for response package
+    m_raw_buf = m_read_buffer.prepare(sizeof(THeader));
+
+    // wait for read request package
+    async_read(*m_boost_socket, m_raw_buf, boost::asio::transfer_all(),
+                                           boost::bind(&CDataClientInterface::readHeader,
+                                                       this,
+                                                       boost::asio::placeholders::error,
+                                                       boost::asio::placeholders::bytes_transferred));
 }
 
 void CDataClientInterface::updateConnectionState(bool state)

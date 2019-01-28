@@ -119,8 +119,10 @@ class CDataClientInterface : public QObject
     private:
 
         void connectionHandler(const boost::system::error_code& error);
-        void readHandler(const boost::system::error_code& error, size_t bytes_transferred);
-        void processIncoming();
+        void readHeader(const boost::system::error_code& error, size_t bytes_transferred);
+        void readData(const boost::system::error_code& error, size_t bytes_transferred);
+        void processHeader();
+        void processIncomingData();
         void updateConnectionState(bool state);
 
         void sendGetDpointsReq(uint16_t start_point, uint16_t number_point);
@@ -144,7 +146,7 @@ class CDataClientInterface : public QObject
 
         boost::asio::streambuf::mutable_buffers_type   m_raw_buf;
         boost::asio::streambuf                         m_read_buffer;
-
+        TResponse                                      m_package;
         std::atomic_bool                               m_connection_state;
 };
 
