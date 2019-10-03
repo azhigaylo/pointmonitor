@@ -314,7 +314,7 @@ Window {
 
             TextField {
                 id: server_ip
-                text: qsTr("127.0.0.1")
+                text: qsTr("192.168.88.10")
                 horizontalAlignment: Text.AlignRight
                 anchors { right: parent.right; bottom : parent.bottom; rightMargin: 20; bottomMargin: 140; }
             }
