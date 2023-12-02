@@ -59,7 +59,7 @@ void CDataClientInterface::startDataConnection(std::string host, int server_port
     }
     catch(boost::system::system_error e)
     {
-        qDebug() << __func__ << ":" << e.code();
+        qDebug() << __func__ << ":" << e.code().message().c_str();
     }
 }
 
